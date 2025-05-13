@@ -17,11 +17,14 @@ st.set_page_config(
 # Load and preprocess data
 @st.cache_data
 def load_data():
+    # Read raw CSVs
     movies_df = pd.read_csv('tmdb_5000_movies.csv')
     credits_df = pd.read_csv('tmdb_5000_credits.csv')
 
+    # Merge both dataframes on title
     df = movies_df.merge(credits_df, on='title')
 
+    # Extract genres from JSON string
     def extract_genres(genres_str):
         try:
             genres = ast.literal_eval(genres_str)
@@ -29,6 +32,7 @@ def load_data():
         except:
             return ''
 
+    # Extract director from crew JSON string
     def extract_director(crew_str):
         try:
             crew = ast.literal_eval(crew_str)
@@ -39,6 +43,7 @@ def load_data():
             return ''
         return ''
 
+    # Extract top 3 cast members
     def extract_cast(cast_str):
         try:
             cast = ast.literal_eval(cast_str)
@@ -46,18 +51,21 @@ def load_data():
         except:
             return ''
 
+    # Apply transformations
     df['genres'] = df['genres'].apply(extract_genres)
     df['director'] = df['crew'].apply(extract_director)
     df['cast'] = df['cast'].apply(extract_cast)
 
+    # Keep only required columns
     df = df[['title', 'genres', 'director', 'cast', 'vote_average']].dropna()
-    df['metadata'] = df['genres'] + ' ' + df['director'] + ' ' + df['cast']
 
+    # Create combined metadata column for recommendations
+    df['metadata'] = df['genres'] + ' ' + df['director'] + ' ' + df['cast']
     return df
 
 df = load_data()
 
-# TF-IDF and similarity matrix
+# Initialize TF-IDF
 tfidf = TfidfVectorizer(stop_words='english')
 tfidf_matrix = tfidf.fit_transform(df['metadata'])
 
@@ -65,25 +73,22 @@ tfidf_matrix = tfidf.fit_transform(df['metadata'])
 def get_recommendations(selected_movies, selected_genres):
     indices = [df[df['title'] == movie].index[0] for movie in selected_movies]
     sim_scores = np.mean(cosine_similarity(tfidf_matrix[indices], tfidf_matrix), axis=0)
-    top_indices = np.argsort(sim_scores)[-30:][::-1]
+    top_indices = np.argsort(sim_scores)[-15:][::-1]
     recommendations = df.iloc[top_indices]
 
     if selected_genres:
-        selected_genres = set([g.strip().lower() for g in selected_genres])
-        recommendations = recommendations[recommendations['genres'].apply(
-            lambda x: any(g in x.lower() for g in selected_genres)
-        )]
+        mask = recommendations['genres'].apply(lambda x: any(genre in x for genre in selected_genres))
+        recommendations = recommendations[mask].head(10)
 
-    return recommendations.drop_duplicates(subset='title').head(10)
+    return recommendations.head(10)
 
 # Genre match visualization
 def plot_genre_match(recommendations, selected_genres):
     matches = []
-    selected_genres_set = set([g.lower() for g in selected_genres])
     for _, movie in recommendations.iterrows():
-        movie_genres = set(g.strip().lower() for g in movie['genres'].split('|'))
-        overlap = len(movie_genres.intersection(selected_genres_set))
-        match_percent = (overlap / len(selected_genres_set)) * 100 if selected_genres_set else 0
+        movie_genres = set(movie['genres'].split('|'))
+        overlap = len(movie_genres.intersection(selected_genres))
+        match_percent = (overlap / len(selected_genres)) * 100
         matches.append(match_percent)
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -93,12 +98,12 @@ def plot_genre_match(recommendations, selected_genres):
 
     for bar in bars:
         width = bar.get_width()
-        ax.text(width + 2, bar.get_y() + bar.get_height() / 2, f'{width:.0f}%', va='center')
+        ax.text(width + 2, bar.get_y() + bar.get_height()/2, f'{width:.0f}%', va='center')
 
     plt.tight_layout()
     st.pyplot(fig)
 
-# UI Layout
+# UI Components
 def main():
     st.markdown("""
     <style>
@@ -121,63 +126,60 @@ def main():
 
     # Step 1: Genre Selection
     st.markdown('<p class="subheader">Step 1: Choose Your Favorite Genres</p>', unsafe_allow_html=True)
-    all_genres = sorted(set(g for genre_str in df['genres'] for g in genre_str.split('|')))
+    all_genres = sorted(set(g for genres in df['genres'].str.split('|') for g in genres))
+    selected_genres = st.multiselect(
+        "Select up to 3 genres (we'll find similar films):",
+        all_genres,
+        max_selections=3,
+        key="genres"
+    )
 
-    # Create a multiselect with restriction
-    selected_genres = st.multiselect("Select up to 3 genres:", all_genres)
-
-    # Genre warning
-    if len(selected_genres) > 3:
-        st.error("You can select a maximum of 3 genres.")
-        selected_genres = selected_genres[:3]
-
-    if 0 < len(selected_genres) <= 3:
-        # Step 2: Movie Selection
+    # Step 2: Movie Selection
+    if selected_genres:
+        genre_movies = df[df['genres'].apply(lambda x: any(g in x for g in selected_genres))]
         st.markdown('<p class="subheader">Step 2: Pick 5 Movies You Love</p>', unsafe_allow_html=True)
-        genre_filtered_movies = df[df['genres'].apply(lambda x: any(g in x for g in selected_genres))]
         selected_movies = st.multiselect(
-            "Select exactly 5 movies:",
-            sorted(genre_filtered_movies['title'].unique())
+            "Select movies that match your taste (exactly 5 for best results):",
+            genre_movies['title'].unique(),
+            max_selections=5,
+            key="movies"
         )
 
         if len(selected_movies) == 5:
-            if st.button("🎯 Get Personalized Recommendations"):
-                with st.spinner("Finding your perfect matches..."):
+            if st.button("🎯 Get Personalized Recommendations", type="primary"):
+                with st.spinner('Finding your perfect matches...'):
                     recommendations = get_recommendations(selected_movies, selected_genres)
 
-                    if recommendations.empty:
-                        st.warning("No matching movies found. Try changing genres or movies.")
-                    else:
-                        st.success("Here are your personalized recommendations!")
-                        st.markdown("---")
+                    st.success("Here are your personalized recommendations!")
+                    st.markdown("---")
 
-                        # Top 3 Highlighted
-                        cols = st.columns(3)
-                        for i in range(min(3, len(recommendations))):
-                            with cols[i]:
-                                st.markdown(f"### #{i+1}: {recommendations.iloc[i]['title']}")
-                                st.caption(f"**Genres:** {recommendations.iloc[i]['genres']}")
-                                st.caption(f"**Director:** {recommendations.iloc[i]['director']}")
-                                st.caption(f"**Rating:** ⭐ {recommendations.iloc[i]['vote_average']}/10")
+                    # Top 3 movies with emphasis
+                    cols = st.columns(3)
+                    for i in range(3):
+                        with cols[i]:
+                            st.markdown(f"### #{i+1}: {recommendations.iloc[i]['title']}")
+                            st.caption(f"**Genres:** {recommendations.iloc[i]['genres']}")
+                            st.caption(f"**Director:** {recommendations.iloc[i]['director']}")
+                            st.caption(f"**Rating:** ⭐ {recommendations.iloc[i]['vote_average']}/10")
 
-                        st.markdown("---")
-                        st.dataframe(
-                            recommendations[['title', 'genres', 'director', 'vote_average']],
-                            column_config={
-                                "title": "Movie Title",
-                                "genres": "Genres",
-                                "director": "Director",
-                                "vote_average": "Rating"
-                            },
-                            use_container_width=True,
-                            hide_index=True
-                        )
+                    st.markdown("---")
+                    st.dataframe(
+                        recommendations[['title', 'genres', 'director', 'vote_average']],
+                        column_config={
+                            "title": "Movie Title",
+                            "genres": "Genres",
+                            "director": "Director",
+                            "vote_average": "Rating"
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
 
-                        st.markdown("### How These Match Your Taste")
-                        plot_genre_match(recommendations, selected_genres)
-
+                    st.markdown("---")
+                    st.markdown("### How These Match Your Taste")
+                    plot_genre_match(recommendations, set(selected_genres))
         elif len(selected_movies) > 0:
-            st.warning("Please select exactly 5 movies to get the best recommendations.")
+            st.warning("Please select exactly 5 movies for optimal recommendations")
 
 if __name__ == "__main__":
     main()
