@@ -73,14 +73,24 @@ tfidf_matrix = tfidf.fit_transform(df['metadata'])
 def get_recommendations(selected_movies, selected_genres):
     indices = [df[df['title'] == movie].index[0] for movie in selected_movies]
     sim_scores = np.mean(cosine_similarity(tfidf_matrix[indices], tfidf_matrix), axis=0)
-    top_indices = np.argsort(sim_scores)[-15:][::-1]
-    recommendations = df.iloc[top_indices]
 
+    # Sort by similarity and get top indices
+    top_indices = np.argsort(sim_scores)[::-1]
+
+    # Exclude selected movies
+    selected_indices = set(indices)
+    filtered_indices = [i for i in top_indices if i not in selected_indices]
+
+    # Fetch top 15 recommendations after exclusion
+    recommendations = df.iloc[filtered_indices[:15]]
+
+    # Optional genre filtering
     if selected_genres:
         mask = recommendations['genres'].apply(lambda x: any(genre in x for genre in selected_genres))
         recommendations = recommendations[mask].head(10)
 
     return recommendations.head(10)
+
 
 # Genre match visualization
 def plot_genre_match(recommendations, selected_genres):
