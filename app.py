@@ -71,7 +71,15 @@ tfidf_matrix = tfidf.fit_transform(df['metadata'])
 
 # Recommendation engine
 def get_recommendations(selected_movies, selected_genres):
-    indices = [df[df['title'] == movie].index[0] for movie in selected_movies]
+    indices = []
+    for movie in selected_movies:
+        try:
+            idx = df[df['title'] == movie].index[0]
+            indices.append(idx)
+        except IndexError:
+            st.warning(f"Movie '{movie}' not found in dataset.")
+            return pd.DataFrame()  # return empty DataFrame if issue occurs
+
     sim_scores = np.mean(cosine_similarity(tfidf_matrix[indices], tfidf_matrix), axis=0)
 
     # Sort by similarity and get top indices
